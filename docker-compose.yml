@@ -1,0 +1,15 @@
+services:
+  api:
+    build: .
+    container_name: dean_office_api
+    ports:
+      - "3010:3010"
+    volumes:
+      - .:/app_code               # Hot-reload коду
+      - db_data:/app_code/data    # Персистентність БД
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+
+volumes:
+  db_data:
