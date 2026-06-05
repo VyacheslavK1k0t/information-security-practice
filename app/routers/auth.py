@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request  # Додано Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from jose import JWTError
+from datetime import datetime, timezone  # Додано для аналізу часу входу (off-hours)
 
 from app.database import get_db
 from app.models import User
@@ -10,14 +11,18 @@ from app.auth.dependencies import get_current_user
 from app.schemas import (
     UserCreate, 
     UserResponse, 
-    LoginRequest,  # Додано для суворої валідації входу
+    LoginRequest, 
     TokenResponse, 
     TokenRefreshRequest, 
     UserInfo
 )
 
-# Імпортуємо лімітер із нашого файлу middleware (Пункт 5.5)
+# Імпортуємо лімітер із твого файлу middleware (Пункт 5.5)
 from app.middleware.rate_limiter import limiter
+
+# Імпорти системи аудиту та журналювання безпеки (Пункт 5.6)
+from app.audit.logger import log_login_success, log_login_failed
+from app.audit.detector import check_brute_force, check_off_hours_access
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -42,28 +47,51 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
     return new_user
 
 # =====================================================================
-# 2. ВХІД (З захистом від Brute Force та JSON-валідацією)
+# 2. ВХІД (З лімітером, захистом від Brute Force та аудитом безпеки)
 # =====================================================================
 @router.post("/login", response_model=TokenResponse)
-@limiter.limit("5/minute")  # Обмеження: макс. 5 спроб входу за хвилину з однієї IP (Пункт 5.5)
+@limiter.limit("5/minute")  # Обмеження slowapi: макс. 5 спроб за хвилину з однієї IP (Пункт 5.5)
 def login(
-    request: Request,  # ОБОВ'ЯЗКОВИЙ параметр для роботи декоратора slowapi
-    login_data: LoginRequest,  # Дані тепер валідуються суворо через Pydantic-схему з JSON body
+    request: Request,  # ОБОВ'ЯЗКОВИЙ параметр для роботи декоратора slowapi та зчитування IP
+    login_data: LoginRequest,  # Дані валідуються суворо через Pydantic-схему з JSON body
     db: Session = Depends(get_db)
 ):
+    # Зчитуємо IP-адресу клієнта
+    ip = request.client.host if request.client else "unknown"
+
+    # [АУДИТ] 1. Перевірка на Brute Force ДО перевірки пароля та звернення до моделей
+    if check_brute_force(db, ip):
+        log_login_failed(db, login_data.username, ip, "brute_force_blocked")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Забагато невдалих спроб. Спробуйте пізніше."
+        )
+
     # Шукаємо користувача за даними з JSON-моделі
     user = db.query(User).filter(User.username == login_data.username).first()
+    
+    # Перевірка наявності користувача та відповідності пароля
     if not user or not verify_password(login_data.password, user.password_hash):
+        # [АУДИТ] Логуємо невдалу спробу через невірні облікові дані
+        log_login_failed(db, login_data.username, ip, "invalid_credentials")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Невірний логін або пароль"
         )
     
     if not user.is_active:
+        # [АУДИТ] Логуємо спробу входу у неактивний обліковий запис
+        log_login_failed(db, login_data.username, ip, "account_deactivated")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="Акаунт деактивовано"
         )
+    
+    # [АУДИТ] 2. Перевірка на вхід у нетиповий нічний час (00:00 - 06:00)
+    check_off_hours_access(db, user.id, user.username, ip, datetime.now(timezone.utc).hour)
+
+    # [АУДИТ] 3. Логуємо успішний вхід користувача в систему
+    log_login_success(db, user.id, user.username, ip)
     
     role = user.roles[0].name if user.roles else "student"
     

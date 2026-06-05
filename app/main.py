@@ -9,6 +9,10 @@ from app.routes.students import router as students_router
 from app.routes.teachers import router as teachers_router
 from app.routes.admin import router as admin_router
 
+# Імпорти системи аудиту та журналювання безпеки (Пункт 5.7)
+from app.audit.middleware import AuditMiddleware
+from app.audit.router import router as audit_router
+
 # Імпорти для систем безпеки та лімітування запитів (Пункти 5.4, 5.5, 5.6)
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.rate_limiter import limiter
@@ -44,13 +48,19 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+# 3. Підключаємо Audit Middleware для автоматичного логування запитів (Пункт 5.7)
+app.add_middleware(AuditMiddleware)
+
 # Викликаємо функцію створення таблиць
 @app.on_event("startup")
 def startup_event():
     init_db()
 
 # Підключення роутерів
-app.include_router(auth_router)       # Підключаємо автентифікацію (вже з лімітером)
+app.include_router(auth_router)       # Підключаємо автентифікацію (вже з лімітером та аудитом)
 app.include_router(students_router)   # Підключаємо студентів
 app.include_router(teachers_router)   # Підключаємо викладачів
 app.include_router(admin_router)      # Підключаємо адміна
+
+# Підключаємо адмін-роутер журналу аудиту безпеки (Пункт 5.7)
+app.include_router(audit_router, prefix="/admin", tags=["audit"])
