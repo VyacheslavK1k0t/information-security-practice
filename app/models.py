@@ -1,8 +1,8 @@
 from datetime import datetime
-from sqlalchemy import (Column, Integer, String, Boolean,
-                        Float, DateTime, ForeignKey, Table, Text)
+from sqlalchemy import (Column, Integer, String, Float, DateTime, ForeignKey, Table, Text, Boolean)
 from sqlalchemy.orm import relationship
 from app.database import Base
+from app.crypto.encryption import encrypt_field, decrypt_field
 
 # Зв’язок User <-> Role (M:N)
 user_roles = Table(
@@ -22,19 +22,42 @@ role_permissions = Table(
 
 class User(Base):
     __tablename__ = "users"
+
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(50), unique=True, nullable=False, index=True)
-    email = Column(String(100), unique=True, nullable=False, index=True)
-    full_name = Column(String(150), nullable=False)
-    password_hash = Column(String(255), nullable=False)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    username = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    full_name = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)  # Додано для виправлення AttributeError
+
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=True)
 
+    # Зашифровані поля
+    _encrypted_email = Column("encrypted_email", String, nullable=False)
+    _encrypted_phone = Column("encrypted_phone", String, nullable=True)
+
+    # Зв'язки
     roles = relationship("Role", secondary=user_roles, back_populates="users")
     group = relationship("Group", back_populates="students")
-    grades = relationship("Grade", back_populates="student", foreign_keys="Grade.student_id")
+    grades = relationship("Grade", back_populates="student", foreign_keys="[Grade.student_id]")
+
+    @property
+    def email(self) -> str:
+        return decrypt_field(self._encrypted_email)
+
+    @email.setter
+    def email(self, value: str):
+        self._encrypted_email = encrypt_field(value)
+
+    @property
+    def phone(self) -> str:
+        if self._encrypted_phone:
+            return decrypt_field(self._encrypted_phone)
+        return None
+
+    @phone.setter
+    def phone(self, value: str):
+        if value:
+            self._encrypted_phone = encrypt_field(value)
 
 class Role(Base):
     __tablename__ = "roles"

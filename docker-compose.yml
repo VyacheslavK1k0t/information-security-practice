@@ -10,6 +10,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - JWT_SECRET_KEY=my-super-safe-dev-secret-key-32-chars-long!!
+      - ENCRYPTION_KEY=zICmrM216JK89qlyKLgxUxaDXLEeG-6B90dS52Izv3Y=
     restart: unless-stopped
 
 volumes:

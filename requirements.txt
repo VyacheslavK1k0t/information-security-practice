@@ -12,3 +12,4 @@ python-jose[cryptography]>=3.3.0
 bleach>=6.0.0
 slowapi>=0.1.9
 pydantic[email]
+cryptography>=42.0.0
