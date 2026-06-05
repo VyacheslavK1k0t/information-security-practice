@@ -1,24 +1,28 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request  # Додано Request
 from sqlalchemy.orm import Session
 from jose import JWTError
 
 from app.database import get_db
 from app.models import User
-from app.security import hash_password, verify_password  # Збережено ваш імпорт
+from app.security import hash_password, verify_password 
 from app.auth.jwt_handler import create_access_token, create_refresh_token, verify_token
 from app.auth.dependencies import get_current_user
 from app.schemas import (
     UserCreate, 
     UserResponse, 
+    LoginRequest,  # Додано для суворої валідації входу
     TokenResponse, 
     TokenRefreshRequest, 
     UserInfo
 )
 
+# Імпортуємо лімітер із нашого файлу middleware (Пункт 5.5)
+from app.middleware.rate_limiter import limiter
+
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 # =====================================================================
-# 1. РЕЄСТРАЦІЯ (Повністю збережено вашу логіку з практичної №4)
+# 1. РЕЄСТРАЦІЯ
 # =====================================================================
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register(user_data: UserCreate, db: Session = Depends(get_db)):
@@ -38,28 +42,31 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
     return new_user
 
 # =====================================================================
-# 2. ВХІД (Переписано під JWT + збережено перевірку активності акаунта)
+# 2. ВХІД (З захистом від Brute Force та JSON-валідацією)
 # =====================================================================
 @router.post("/login", response_model=TokenResponse)
-def login(username: str, password: str, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == username).first()
-    if not user or not verify_password(password, user.password_hash):
+@limiter.limit("5/minute")  # Обмеження: макс. 5 спроб входу за хвилину з однієї IP (Пункт 5.5)
+def login(
+    request: Request,  # ОБОВ'ЯЗКОВИЙ параметр для роботи декоратора slowapi
+    login_data: LoginRequest,  # Дані тепер валідуються суворо через Pydantic-схему з JSON body
+    db: Session = Depends(get_db)
+):
+    # Шукаємо користувача за даними з JSON-моделі
+    user = db.query(User).filter(User.username == login_data.username).first()
+    if not user or not verify_password(login_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Невірний логін або пароль"
         )
     
-    # Збережено вашу класну перевірку з минулої роботи
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="Акаунт деактивовано"
         )
     
-    # Визначаємо роль користувача (беремо першу, якщо призначено, або за замовчуванням student)
     role = user.roles[0].name if user.roles else "student"
     
-    # Генеруємо нову пару токенів
     access_token = create_access_token(user.id, role)
     refresh_token = create_refresh_token(user.id)
     
@@ -69,11 +76,11 @@ def login(username: str, password: str, db: Session = Depends(get_db)):
     )
 
 # =====================================================================
-# 3. ОНОВЛЕННЯ ТОКЕНА (Новий ендпоінт для пункту 5.6)
+# 3. ОНОВЛЕННЯ ТОКЕНА
 # =====================================================================
 @router.post("/refresh", response_model=TokenResponse)
 def refresh_token(body: TokenRefreshRequest, db: Session = Depends(get_db)):
-    """Оновлення access токена за допомогою якісного refresh токена."""
+    """Оновлення access токена за допомогою refresh токена."""
     try:
         payload = verify_token(body.refresh_token)
     except JWTError:
@@ -103,7 +110,7 @@ def refresh_token(body: TokenRefreshRequest, db: Session = Depends(get_db)):
     )
 
 # =====================================================================
-# 4. ПРОФІЛЬ (Новий захищений ендпоінт для перевірки автентифікації)
+# 4. ПРОФІЛЬ
 # =====================================================================
 @router.get("/me", response_model=UserInfo)
 def get_me(current_user: User = Depends(get_current_user)):
