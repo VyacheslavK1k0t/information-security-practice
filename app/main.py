@@ -1,17 +1,17 @@
 from fastapi import FastAPI
-from app.database import Base, engine
-from app import models  
+from app.database import engine, Base  # Імпортуйте engine та Base
+from app.routers import auth
 
-app = FastAPI(title="Electronic Dean's Office")
+# Створюємо таблиці в БД при старті, якщо їх немає
+def init_db():
+    Base.metadata.create_all(bind=engine)
 
-@app.get("/")
-def root():
-    return {"message": "Electronic Dean's Office API"}
+app = FastAPI()
 
-@app.get("/health")
-def health_check():
-    return {
-        "status": "healthy",
-        "database": "SQLite",
-        "tables": len(Base.metadata.tables)
-    }
+# Викликаємо функцію створення таблиць
+@app.on_event("startup")
+def startup_event():
+    init_db()
+
+# Ваші роутери
+app.include_router(auth.router)
